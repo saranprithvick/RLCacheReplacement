@@ -6,13 +6,46 @@ class Cache:
         self.size = size
         self.policy = policy
         self.lines = {}
+        self.access_frequency = {}
 
         self.hits = 0
         self.misses = 0
         self.evictions = 0
 
+    def build_state(self, victim):
+
+        freq = self.access_frequency.get(victim, 0)
+
+        # victim() always returns LRU
+        recency_bucket = 0
+
+        if freq <= 1:
+            frequency_bucket = 0
+
+        elif freq <= 3:
+            frequency_bucket = 1
+
+        else:
+            frequency_bucket = 2
+
+        return {
+            "recency_bucket": recency_bucket,
+            "frequency_bucket": frequency_bucket
+        }
+    
+    def rl_decision(self,state):
+        
+        if state["frequency_bucket"] == 2:
+            return "KEEP"
+        
+        return "EVICT"
+
     def access(self,block):
         
+        self.access_frequency[block] = (
+            self.access_frequency.get(block,0) + 1
+        )
+
         #HIT
         if block in self.lines:
             self.hits += 1
@@ -32,16 +65,50 @@ class Cache:
 
             victim = self.policy.victim()
             
-            del self.lines[victim]
+            state = self.build_state(victim)
 
-            self.policy.remove(victim)
-
-            self.evictions += 1
+            decision = self.rl_decision(state)
 
             print(
-                f"{block:>2} -> MISS    "
-                f"Evict={victim}"
+                f"Victim={victim}",
+                f"State={state}",
+                f"Action={decision}",
             )
+
+            if decision == "EVICT":
+
+                del self.lines[victim]
+
+                self.policy.remove(victim)
+
+                self.evictions += 1
+
+                print(
+                    f"{block:>2} -> MISS    "
+                    f"Evict={victim}"
+                )
+
+            else:
+
+                # Give victim second chance
+
+                self.policy.remove(victim)
+
+                self.policy.insert(victim)
+
+                victim = self.policy.victim()
+
+                del self.lines[victim]
+
+                self.policy.remove(victim)
+
+                self.evictions += 1
+
+                print(
+                    f"{block:>2} -> MISS    "
+                    f"SecondChance "
+                    f"Evict={victim}"
+                )
 
         else:
             print(
@@ -51,7 +118,7 @@ class Cache:
         self.lines[block] = CacheLine(block)
 
         self.policy.insert(block)
-
+    
     def get_stats(self):
 
         total = self.hits + self.misses
