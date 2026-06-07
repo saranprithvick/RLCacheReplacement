@@ -1,15 +1,12 @@
 from simulator.cache import Cache
-from policies.lru import LRUPolicy
-from rl.agent import RLAgent
-from policies.rl_lru import (
-    RLLRUPolicy
-)
+from rl.agent import QLearningAgent
+from policies.rl_lru import RLLRUPolicy
 
 
 def load_trace(path):
-
     with open(path, "r") as f:
         return [line.strip() for line in f if line.strip()]
+
 
 trace = [
     "A",
@@ -26,26 +23,46 @@ trace = [
     "E"
 ]
 
+
 def main():
 
-    # trace = load_trace(
-    #     "workloads/synthetic/trace_1.txt"
-    # )
-    agent = RLAgent()
+    episodes = 50
 
-    policy = RLLRUPolicy(
-        agent
+    agent = QLearningAgent(
+        alpha=0.1,
+        gamma=0.9,
+        epsilon=0.1
     )
 
-    cache = Cache(
-        size=4,
-        policy=LRUPolicy()
-    )
+    for episode in range(episodes):
 
-    for block in trace:
-        cache.access(block)
+        policy = RLLRUPolicy(agent)
 
+        cache = Cache(
+            size=4,
+            policy=policy
+        )
+
+        for block in trace:
+            cache.access(block)
+
+        if (episode + 1) % 10 == 0:
+            print(
+                f"Episode {episode + 1} completed"
+            )
+
+    print("\n===== FINAL RESULTS =====")
     cache.print_stats()
+
+    print("\n===== Q TABLE =====")
+
+    for state, values in sorted(agent.q_table.items()):
+
+        print(
+            f"{state} -> "
+            f"EVICT={values[0]:.3f} "
+            f"KEEP={values[1]:.3f}"
+        )
 
 
 if __name__ == "__main__":
