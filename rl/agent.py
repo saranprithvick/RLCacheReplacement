@@ -72,3 +72,4 @@ class QLearningAgent:
         self.q_table[state][
             action_idx
         ] = new_q
+

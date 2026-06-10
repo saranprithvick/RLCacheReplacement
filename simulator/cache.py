@@ -3,10 +3,12 @@ from rl.history_table import HistoryTable
 
 
 class Cache:
-    def __init__(self, size, policy):
+
+    def __init__(self, size, policy, verbose=True):
 
         self.size = size
         self.policy = policy
+        self.verbose = verbose
 
         self.lines = {}
         self.access_frequency = {}
@@ -17,31 +19,47 @@ class Cache:
 
         self.recent_hit = {}
 
-        # Q-Learning bookkeeping
-        self.last_state = None
-        self.last_action = None
+        # Q-learning bookkeeping
+        self.pending_state = None
+        self.pending_action = None
+        self.pending_victim = None
 
         self.history_table = HistoryTable()
 
-    def build_state(self, victim):
+    def _log(self, message):
 
-        freq = self.access_frequency.get(victim, 0)
+        if self.verbose:
+            print(message)
 
-        if freq <= 1:
-            frequency_bucket = 0
+    def _resolve_pending_transition(self, block, next_state=None):
 
-        elif freq <= 3:
-            frequency_bucket = 1
+        if not hasattr(self.policy, "agent"):
+            return
 
+        if self.pending_state is None:
+            return
+
+        if block == self.pending_victim:
+            reward = -1
         else:
-            frequency_bucket = 2
+            reward = +1
 
-        recent_hit_bucket = self.recent_hit.get(victim, 0)
-
-        return (
-            frequency_bucket,
-            recent_hit_bucket
+        bootstrap_state = (
+            next_state
+            if next_state is not None
+            else self.pending_state
         )
+
+        self.policy.agent.update(
+            self.pending_state,
+            self.pending_action,
+            reward,
+            bootstrap_state,
+        )
+
+        self.pending_state = None
+        self.pending_action = None
+        self.pending_victim = None
 
     def access(self, block):
 
@@ -49,32 +67,15 @@ class Cache:
             self.access_frequency.get(block, 0) + 1
         )
 
-        # ------------------------------------
-        # Reward generation (June 4 Step 5)
-        # ------------------------------------
+        is_hit = block in self.lines
 
-        if self.last_state is not None and self.last_action is not None:
-
-            if self.history_table.was_evicted(block):
-
-                reward = -1
-
-            else:
-
-                reward = +1
-
-            self.policy.agent.update(
-                self.last_state,
-                self.last_action,
-                reward,
-                self.last_state
-            )
-
-        # ------------------------------------
+        # ----------------------------------
         # HIT
-        # ------------------------------------
+        # ----------------------------------
 
-        if block in self.lines:
+        if is_hit:
+
+            self._resolve_pending_transition(block)
 
             self.hits += 1
 
@@ -82,95 +83,155 @@ class Cache:
 
             self.policy.access(block)
 
-            print(
+            self._log(
                 f"{block:>2} -> HIT   "
                 f"Cache={list(self.lines.keys())}"
             )
 
             return
 
-        # ------------------------------------
+        # ----------------------------------
         # MISS
-        # ------------------------------------
+        # ----------------------------------
 
         self.misses += 1
 
+        next_state = None
+
         if len(self.lines) >= self.size:
 
-            victim = self.policy.victim()
+            # ----------------------------------
+            # RL-LRU PATH
+            # ----------------------------------
 
-            state = self.build_state(victim)
+            if hasattr(self.policy, "agent"):
 
-            action = self.policy.agent.choose_action(
-                state
-            )
+                cache_lines = []
 
-            decision = action.name
+                for block_name in self.policy.lru.order:
 
-            # Store for future Q-update
-            self.last_state = state
-            self.last_action = action
+                    cache_lines.append(
+                        {
+                            "block": block_name,
+                            "frequency": self.access_frequency.get(
+                                block_name, 0
+                            ),
+                            "recent_hit": self.recent_hit.get(
+                                block_name, 0
+                            ),
+                        }
+                    )
 
-            print(
-                f"Victim={victim}",
-                f"State={state}",
-                f"Action={decision}",
-            )
-
-            if decision == "EVICT":
-
-                self.history_table.add(victim)
-
-                del self.lines[victim]
-
-                if victim in self.recent_hit:
-                    del self.recent_hit[victim]
-
-                self.policy.remove(victim)
-
-                self.evictions += 1
-
-                print(
-                    f"{block:>2} -> MISS    "
-                    f"Evict={victim}"
+                candidate, state, action = (
+                    self.policy.select_victim(cache_lines)
                 )
+
+                next_state = state
+
+                self._resolve_pending_transition(
+                    block,
+                    next_state=next_state,
+                )
+
+                victim = candidate["block"]
+
+                self.pending_state = state
+                self.pending_action = action
+
+                self._log(
+                    f"Candidate={victim} "
+                    f"State={state} "
+                    f"Action={action.name}"
+                )
+
+                # -------------------------
+                # EVICT
+                # -------------------------
+
+                if action.name == "EVICT":
+
+                    self.pending_victim = victim
+
+                    self.history_table.add(victim)
+
+                    del self.lines[victim]
+
+                    self.recent_hit.pop(victim, None)
+
+                    self.policy.remove(victim)
+
+                    self.evictions += 1
+
+                    self._log(
+                        f"{block:>2} -> MISS    "
+                        f"Evict={victim}"
+                    )
+
+                # -------------------------
+                # KEEP
+                # -------------------------
+
+                else:
+
+                    protected = victim
+
+                    self.policy.remove(protected)
+                    self.policy.insert(protected)
+
+                    victim = self.policy.victim()
+
+                    self.pending_victim = victim
+
+                    self.history_table.add(victim)
+
+                    del self.lines[victim]
+
+                    self.recent_hit.pop(victim, None)
+
+                    self.policy.remove(victim)
+
+                    self.evictions += 1
+
+                    self._log(
+                        f"{block:>2} -> MISS    "
+                        f"SecondChance "
+                        f"Evict={victim}"
+                    )
+
+            # ----------------------------------
+            # PURE LRU PATH
+            # ----------------------------------
 
             else:
 
-                # Give victim second chance
-
-                self.policy.remove(victim)
-
-                self.policy.insert(victim)
-
                 victim = self.policy.victim()
 
-                self.history_table.add(victim)
-
                 del self.lines[victim]
-
-                if victim in self.recent_hit:
-                    del self.recent_hit[victim]
 
                 self.policy.remove(victim)
 
                 self.evictions += 1
 
-                print(
+                self._log(
                     f"{block:>2} -> MISS    "
-                    f"SecondChance "
                     f"Evict={victim}"
                 )
 
         else:
 
-            print(
-                f"{block:>2} -> MISS"
-            )
+            self._resolve_pending_transition(block)
+
+            self._log(f"{block:>2} -> MISS")
+
+        # ----------------------------------
+        # Insert New Block
+        # ----------------------------------
 
         self.lines[block] = CacheLine(block)
 
         self.recent_hit[block] = 0
+
+        self.history_table.remove(block)
 
         self.policy.insert(block)
 
@@ -182,18 +243,40 @@ class Cache:
             "hits": self.hits,
             "misses": self.misses,
             "evictions": self.evictions,
-            "hit_rate": round(self.hits / total, 4),
-            "miss_rate": round(self.misses / total, 4)
+            "hit_rate": round(
+                self.hits / total,
+                4
+            ),
+            "miss_rate": round(
+                self.misses / total,
+                4
+            ),
         }
 
     def print_stats(self):
 
         stats = self.get_stats()
 
-        print("\n ===== RESULTS =====")
+        print("\n===== RESULTS =====")
 
-        print(f"Hits      : {stats['hits']}")
-        print(f"Misses    : {stats['misses']}")
-        print(f"Evictions : {stats['evictions']}")
-        print(f"Hit Rate  : {stats['hit_rate']:.2%}")
-        print(f"Miss Rate : {stats['miss_rate']:.2%}")
+        print(
+            f"Hits      : {stats['hits']}"
+        )
+
+        print(
+            f"Misses    : {stats['misses']}"
+        )
+
+        print(
+            f"Evictions : {stats['evictions']}"
+        )
+
+        print(
+            f"Hit Rate  : "
+            f"{stats['hit_rate']:.2%}"
+        )
+
+        print(
+            f"Miss Rate : "
+            f"{stats['miss_rate']:.2%}"
+        )
