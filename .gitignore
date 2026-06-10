@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Matplotlib local cache
+.matplotlib/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Optional: keep one canonical CSV; ignore timestamped duplicates
+results/csv/comparison_*.csv

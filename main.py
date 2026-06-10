@@ -1,68 +1,30 @@
-from simulator.cache import Cache
-from rl.agent import QLearningAgent
-from policies.rl_lru import RLLRUPolicy
+"""
+Project entry point.
 
+  python main.py              → quick LRU vs RL-LRU run (benchmark suite)
+  python main.py compare ...  → systematic grid + CSV export
+  python main.py analyze ...  → tables, plots, observations (Day 08)
+"""
 
-def load_trace(path):
-    with open(path, "r") as f:
-        return [line.strip() for line in f if line.strip()]
+import sys
 
-
-trace = [
-    "A",
-    "B",
-    "C",
-    "D",
-    "A",
-    "B",
-    "E",
-    "A",
-    "B",
-    "C",
-    "D",
-    "E"
-]
+from experiments.analyze import main as analyze_main
+from experiments.compare import main as compare_main
+from experiments.run import main as run_main
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "compare":
+        sys.argv.pop(1)
+        compare_main()
+        return
 
-    episodes = 50
+    if len(sys.argv) > 1 and sys.argv[1] == "analyze":
+        sys.argv.pop(1)
+        analyze_main()
+        return
 
-    agent = QLearningAgent(
-        alpha=0.1,
-        gamma=0.9,
-        epsilon=0.1
-    )
-
-    for episode in range(episodes):
-
-        policy = RLLRUPolicy(agent)
-
-        cache = Cache(
-            size=4,
-            policy=policy
-        )
-
-        for block in trace:
-            cache.access(block)
-
-        if (episode + 1) % 10 == 0:
-            print(
-                f"Episode {episode + 1} completed"
-            )
-
-    print("\n===== FINAL RESULTS =====")
-    cache.print_stats()
-
-    print("\n===== Q TABLE =====")
-
-    for state, values in sorted(agent.q_table.items()):
-
-        print(
-            f"{state} -> "
-            f"EVICT={values[0]:.3f} "
-            f"KEEP={values[1]:.3f}"
-        )
+    run_main()
 
 
 if __name__ == "__main__":

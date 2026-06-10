@@ -1,0 +1,5 @@
+| metric | count |
+| --- | --- |
+| RL-LRU better | 7 |
+| LRU better | 1 |
+| Tied | 7 |
