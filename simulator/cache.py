@@ -19,47 +19,78 @@ class Cache:
 
         self.recent_hit = {}
 
-        # Q-learning bookkeeping
-        self.pending_state = None
-        self.pending_action = None
-        self.pending_victim = None
+        # Ghost Cache: bounded eviction history
+        # sized at 2x cache capacity
+        self.history_table = HistoryTable(
+            capacity=2 * size
+        )
 
-        self.history_table = HistoryTable()
+    def _is_rl_policy(self):
+
+        return hasattr(self.policy, "agent")
+
+    def _reward_expired(self, expired, current_state):
+        """Issue a positive reward for a block that expired
+        from the history table without being re-requested.
+        This means the eviction was a good decision."""
+
+        if expired is None:
+            return
+
+        if not self._is_rl_policy():
+            return
+
+        _expired_block, (exp_state, exp_action) = expired
+
+        if exp_state is None:
+            return
+
+        bootstrap_state = (
+            current_state
+            if current_state is not None
+            else exp_state
+        )
+
+        self.policy.agent.update(
+            exp_state,
+            exp_action,
+            +1,
+            bootstrap_state,
+        )
+
+    def _reward_near_miss(self, meta, current_state):
+        """Issue a negative reward for a block that was
+        re-requested while still in the history table.
+        This means the eviction was premature."""
+
+        if meta is None:
+            return
+
+        if not self._is_rl_policy():
+            return
+
+        near_state, near_action = meta
+
+        if near_state is None:
+            return
+
+        bootstrap_state = (
+            current_state
+            if current_state is not None
+            else near_state
+        )
+
+        self.policy.agent.update(
+            near_state,
+            near_action,
+            -1,
+            bootstrap_state,
+        )
 
     def _log(self, message):
 
         if self.verbose:
             print(message)
-
-    def _resolve_pending_transition(self, block, next_state=None):
-
-        if not hasattr(self.policy, "agent"):
-            return
-
-        if self.pending_state is None:
-            return
-
-        if block == self.pending_victim:
-            reward = -1
-        else:
-            reward = +1
-
-        bootstrap_state = (
-            next_state
-            if next_state is not None
-            else self.pending_state
-        )
-
-        self.policy.agent.update(
-            self.pending_state,
-            self.pending_action,
-            reward,
-            bootstrap_state,
-        )
-
-        self.pending_state = None
-        self.pending_action = None
-        self.pending_victim = None
 
     def access(self, block):
 
@@ -74,8 +105,6 @@ class Cache:
         # ----------------------------------
 
         if is_hit:
-
-            self._resolve_pending_transition(block)
 
             self.hits += 1
 
@@ -96,7 +125,11 @@ class Cache:
 
         self.misses += 1
 
-        next_state = None
+        # Check if this missed block is in the
+        # ghost cache (near-miss detection)
+        near_miss_meta = self.history_table.remove(
+            block
+        )
 
         if len(self.lines) >= self.size:
 
@@ -104,7 +137,7 @@ class Cache:
             # RL-LRU PATH
             # ----------------------------------
 
-            if hasattr(self.policy, "agent"):
+            if self._is_rl_policy():
 
                 cache_lines = []
 
@@ -126,17 +159,13 @@ class Cache:
                     self.policy.select_victim(cache_lines)
                 )
 
-                next_state = state
-
-                self._resolve_pending_transition(
-                    block,
-                    next_state=next_state,
+                # Resolve the near-miss penalty using
+                # the current state as bootstrap
+                self._reward_near_miss(
+                    near_miss_meta, state
                 )
 
                 victim = candidate["block"]
-
-                self.pending_state = state
-                self.pending_action = action
 
                 self._log(
                     f"Candidate={victim} "
@@ -150,9 +179,13 @@ class Cache:
 
                 if action.name == "EVICT":
 
-                    self.pending_victim = victim
+                    expired = self.history_table.add(
+                        victim, state, action
+                    )
 
-                    self.history_table.add(victim)
+                    # Reward the expired block
+                    # (it was never re-requested)
+                    self._reward_expired(expired, state)
 
                     del self.lines[victim]
 
@@ -180,9 +213,12 @@ class Cache:
 
                     victim = self.policy.victim()
 
-                    self.pending_victim = victim
+                    expired = self.history_table.add(
+                        victim, state, action
+                    )
 
-                    self.history_table.add(victim)
+                    # Reward the expired block
+                    self._reward_expired(expired, state)
 
                     del self.lines[victim]
 
@@ -219,7 +255,12 @@ class Cache:
 
         else:
 
-            self._resolve_pending_transition(block)
+            # Cache not full yet, resolve any
+            # near-miss from the ghost cache
+            if self._is_rl_policy():
+                self._reward_near_miss(
+                    near_miss_meta, None
+                )
 
             self._log(f"{block:>2} -> MISS")
 
@@ -230,8 +271,6 @@ class Cache:
         self.lines[block] = CacheLine(block)
 
         self.recent_hit[block] = 0
-
-        self.history_table.remove(block)
 
         self.policy.insert(block)
 

@@ -3,19 +3,18 @@
 ## Overall (all cache sizes)
 
 - RL-LRU better: **7** configurations
-- LRU better: **1** configurations
-- Tied: **7** configurations
+- LRU better: **2** configurations
+- Tied: **6** configurations
 
 ## Primary analysis (cache size = 4)
 
 ### Where RL-LRU helps
 
-- **thrashing_cache_plus_one** (Thrashing): 0.0% → 48.0% (Δ +48.0%)
-- **zipfian** (Frequency / popularity): 63.5% → 64.0% (Δ +0.5%)
+- **thrashing_cache_plus_one** (Thrashing): 0.0% → 28.0% (Δ +28.0%)
 
 ### Where LRU is better
 
-- LRU does not beat RL-LRU at the primary cache size.
+- **zipfian** (Frequency / popularity): RL-LRU underperforms by 4.0%
 
 ### Ties
 
